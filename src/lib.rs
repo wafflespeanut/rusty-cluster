@@ -42,7 +42,7 @@ impl ProcessType {
         unsafe { mem::transmute(h.finish()) }
     }
 
-    fn into_stream<W: Write>(&self, stream: &mut BufWriter<W>) -> Result<(), String> {
+    fn into_stream<W: Write>(&self, stream: &mut W) -> Result<(), String> {
         let bytes = self.hash();
         let _ = stream.write(&bytes)
                       .map_err(|e| format!("Cannot write ProcessType into stream ({})", e))?;
@@ -50,7 +50,7 @@ impl ProcessType {
     }
 
     #[inline]
-    fn from_stream<R: Read>(stream: &mut BufReader<R>) -> Result<ProcessType, String> {
+    fn from_stream<R: Read>(stream: &mut R) -> Result<ProcessType, String> {
         let mut bytes = [0; 8];
         let _ = stream.read_exact(&mut bytes)
                       .map_err(|e| format!("Cannot read ProcessType from stream ({})", e))?;

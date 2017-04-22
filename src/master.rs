@@ -1,5 +1,5 @@
 use ProcessType;
-use std::io::{BufReader, BufWriter, Read};
+use std::io::Read;
 use std::net::TcpStream;
 
 pub struct Cluster {
@@ -20,17 +20,15 @@ impl Cluster {
     }
 
     pub fn ping_addr(&self, addr: &str) -> Result<(), String> {
-        let stream = TcpStream::connect(&addr)
-                               .map_err(|e| format!("Cannot connect to {} ({})", addr, e))?;
+        let mut stream = TcpStream::connect(&addr)
+                                   .map_err(|e| format!("Cannot connect to {} ({})", addr, e))?;
         {
-            let mut writer = BufWriter::new(&stream);
             let proc_type = ProcessType::Ping;
-            proc_type.into_stream(&mut writer).map_err(|e| format!("Cannot ping {} ({})", addr, e))?;
+            proc_type.into_stream(&mut stream).map_err(|e| format!("Cannot ping {} ({})", addr, e))?;
         }
 
-        let mut reader = BufReader::new(stream);
         let mut response = [0; 1];
-        let _ = reader.read_exact(&mut response);
+        let _ = stream.read_exact(&mut response);
         if response[0] > 0 {
             Ok(())
         } else {

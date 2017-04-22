@@ -1,6 +1,6 @@
 use ProcessType;
 
-use std::io::{BufReader, BufWriter, Write};
+use std::io::{BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{self, Sender, Receiver};
 use std::thread;
@@ -21,19 +21,20 @@ impl Slave {
         }
     }
 
-    pub fn handle_stream(&mut self, stream: TcpStream) {
-        let mut reader = BufReader::new(stream);
-        let proc_type = match ProcessType::from_stream(&mut reader) {
+    pub fn handle_stream(&mut self, mut stream: TcpStream) {
+        let proc_type = match ProcessType::from_stream(&mut stream) {
             Ok(p) => p,
             Err(_) => return,
         };
 
         let sender = self.sender.clone();
         let _ = thread::spawn(move || {
-            let mut writer = BufWriter::new(reader.into_inner());
-            let _ = writer.write(&[1]);     // ack
+            let mut writer = BufWriter::new(stream);
 
             match proc_type {
+                ProcessType::Ping => {
+                    let _ = writer.write(&[1]);
+                },
                 ProcessType::Shutdown => {
                     let _ = sender.send(());
                 },
