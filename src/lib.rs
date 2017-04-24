@@ -5,8 +5,8 @@ extern crate serde_json;
 #[macro_use] extern crate serde_derive;
 
 pub mod master;
-#[macro_use] mod utils;
 pub mod slave;
+mod utils;
 
 use bincode::Infinite;
 use utils::DjB2;
@@ -49,7 +49,6 @@ impl ProcessType {
         Ok(())
     }
 
-    #[inline]
     fn from_stream<R: Read>(stream: &mut R) -> Result<ProcessType, String> {
         let mut bytes = [0; 8];
         let _ = stream.read_exact(&mut bytes)
