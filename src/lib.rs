@@ -9,6 +9,7 @@ pub mod slave;
 mod utils;
 
 use bincode::Infinite;
+use serde::{Deserialize, Serialize};
 use utils::DjB2;
 
 use std::hash::Hasher;
@@ -61,16 +62,19 @@ impl ProcessType {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Data(Vec<u8>);
+pub struct Data<T>(T);
 
-impl Data {
-    pub fn serialize_into<W: Write>(&self, stream: &mut BufWriter<W>) -> Result<(), String> {
+impl<T: Serialize> Data<T> {
+    pub fn serialize_into<W: Write>(&self, stream: W) -> Result<(), String> {
         let mut writer = BufWriter::with_capacity(BUFFER_SIZE, stream);
         bincode::serialize_into(&mut writer, &self.0, Infinite)
                 .map_err(|e| format!("Cannot serialize data into stream ({})", e))
     }
+}
 
-    pub fn deserialize_from<R: Read>(stream: &mut BufReader<R>) -> Result<Data, String> {
+impl<T: Deserialize> Data<T> {
+    // FIXME: Possible DOS (should limit the bytes read from reader)
+    pub fn deserialize_from<R: Read>(stream: R) -> Result<Data<T>, String> {
         let mut reader = BufReader::with_capacity(BUFFER_SIZE, stream);
         bincode::deserialize_from(&mut reader, Infinite)
                 .map_err(|e| format!("Cannot deserialize data from stream ({})", e))

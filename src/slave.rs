@@ -1,6 +1,6 @@
-use {ProcessType, utils};
+use {Data, ProcessType, utils};
 
-use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::mem;
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
@@ -40,8 +40,18 @@ impl Slave {
                     let _ = sender.send(());
                 },
                 ProcessType::Execute => {
-                    let mut cmd_stream = Vec::new();
-                    let _ = stream.read_to_end(&mut cmd_stream);        // careful - possible DOS
+                    let cmd_stream: Vec<u8> = {
+                        let Data(data) = match Data::deserialize_from(&stream) {
+                            Ok(s) => s,
+                            Err(e) => {
+                                let _ = stream.write(e.as_bytes());
+                                return
+                            },
+                        };
+
+                        data
+                    };
+
                     let mut args = utils::split_args(cmd_stream);
                     let cmd = mem::replace(&mut args[0], String::new());
                     if cmd.is_empty() {

@@ -1,15 +1,18 @@
-use ProcessType;
-use std::io::{BufRead, BufReader, Read, Write};
+use {Data, ProcessType};
+use utils::AsBytes;
+
+use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Read};
 use std::net::TcpStream;
 
 pub struct Cluster {
-    addrs: Vec<String>,     // FIXME: Change addrs to ToSocketAddr impls
+    addrs: HashSet<String>,     // FIXME: Change addrs to ToSocketAddr impls
 }
 
 impl Cluster {
     pub fn new() -> Cluster {
         Cluster {
-            addrs: Vec::new(),
+            addrs: HashSet::new(),
         }
     }
 
@@ -21,8 +24,12 @@ impl Cluster {
     }
 
     pub fn add_node(&mut self, addr: &str) -> Result<(), String> {
+        if self.addrs.contains(addr) {
+            return Ok(())
+        }
+
         let _ = self.ping_addr(addr)?;
-        self.addrs.push(addr.to_owned());
+        self.addrs.insert(addr.to_owned());
         Ok(())
     }
 
@@ -46,17 +53,24 @@ impl Cluster {
         Ok(())
     }
 
-    pub fn execute_at_attr(&self, addr: &str, command: &str) -> Result<StreamingOutput, String> {
-        let mut stream = self.connect_with_proc(ProcessType::Execute, addr)?;
-        stream.write_all(command.as_bytes()).map_err(|e| format!("Cannot write to stream ({})", e))?;
+    pub fn execute_at_node<C>(&self, addr: &str, command: C) -> Result<StreamingOutput, String>
+        where C: AsBytes
+    {
+        let stream = self.connect_with_proc(ProcessType::Execute, addr)?;
+
+        {
+            let data = Data(command.bytes());
+            data.serialize_into(&stream)?;
+        }
+
         Ok(StreamingOutput {
             buf: BufReader::new(stream),
         })
     }
 
-    pub fn execute_all(&self) -> Result<(), String> {
+    pub fn execute_all(&self, command: &str) -> Result<(), String> {
         for addr in &self.addrs {
-            self.execute_at_attr(addr)?;
+            self.execute_at_node(addr, command)?;
         }
 
         Ok(())
@@ -68,16 +82,13 @@ pub struct StreamingOutput {
 }
 
 impl Iterator for StreamingOutput {
-    type Item = Result<String, String>;
+    type Item = Result<Vec<u8>, String>;
 
     fn next(&mut self) -> Option<Self::Item> {
         let mut bytes = Vec::new();
         match self.buf.read_until(10, &mut bytes) {
             Ok(0) => None,
-            Ok(_) => {
-                let string = String::from_utf8_lossy(&bytes);
-                Some(Ok(string.into_owned()))
-            },
+            Ok(_) => Some(Ok(bytes)),
             Err(e) => Some(Err(format!("Error reading TCP stream ({})", e))),
         }
     }

@@ -45,6 +45,7 @@ pub fn split_args(bytes: Vec<u8>) -> Vec<String> {
             },
             SPACE if last_open.is_none() => {
                 vec.push(String::new());
+                continue
             },
             _ => (),
         }
@@ -52,9 +53,33 @@ pub fn split_args(bytes: Vec<u8>) -> Vec<String> {
         vec.last_mut().unwrap().push(byte as char);
     }
 
-    if vec.len() == 1 && !vec[0].is_empty() {
-        vec.push(String::new());
-    }
-
     vec
+}
+
+pub trait AsBytes {
+    fn bytes(&self) -> &[u8];
+}
+
+impl AsBytes for String {
+    #[inline]
+    fn bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl<'a> AsBytes for &'a str {
+    #[inline]
+    fn bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl AsBytes for Vec<u8> {
+    #[inline]
+    fn bytes(&self) -> &[u8] { self }
+}
+
+impl<'a> AsBytes for &'a [u8] {
+    #[inline]
+    fn bytes(&self) -> &[u8] { self }
 }
