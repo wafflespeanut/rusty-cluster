@@ -2,7 +2,7 @@ use {BUFFER_SIZE, Data, ProcessType};
 use utils::AsBytes;
 
 use std::collections::HashSet;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::TcpStream;
 
 pub struct Cluster {
@@ -68,6 +68,41 @@ impl Cluster {
     pub fn execute_all<C: AsBytes>(&self, command: &C) -> Result<(), String> {
         for addr in &self.addrs {
             self.execute_at_node(addr, command)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn send_file_to_all<R>(&self, write_path: &str, mut reader: R) -> Result<(), String>
+        where R: Read
+    {
+        let mut streams = vec![];
+        for addr in &self.addrs {
+            streams.push(self.connect_with_proc(ProcessType::Write, addr)?);
+        }
+
+        let data = Data(write_path);
+        for stream in &streams {
+            data.serialize_into(stream)?;
+        }
+
+        let mut streams = streams.into_iter().map(BufWriter::new).collect::<Vec<_>>();
+
+        loop {      // everything else is content
+            let mut bytes = Vec::new();
+            let mut chunk = (&mut reader).take(BUFFER_SIZE as u64);
+            match chunk.read_to_end(&mut bytes) {
+                Ok(n) => {
+                    if n == 0 {
+                        break
+                    }
+
+                    for stream in &mut streams {
+                        stream.write(&bytes).map_err(|e| format!("Cannot write to stream! ({})", e))?;
+                    }
+                }
+                Err(e) => return Err(format!("Cannot read bytes from reader ({})", e)),
+            };
         }
 
         Ok(())

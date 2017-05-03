@@ -1,6 +1,7 @@
-use {Data, ProcessType, utils};
+use {BUFFER_SIZE, Data, ProcessType, utils};
 
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::fs::File;
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender, Receiver};
@@ -82,6 +83,26 @@ impl Slave {
                                 bytes.clear();
                             },
                         }
+                    }
+                },
+                ProcessType::Write => {
+                    let path: String = get_data!(stream);
+                    let mut fd = match File::create(&path) {
+                        Ok(f) => BufWriter::new(f),
+                        Err(_) => return,
+                    };
+
+                    let mut reader = BufReader::with_capacity(BUFFER_SIZE, stream);
+                    loop {
+                        let mut bytes = Vec::new();
+                        let mut chunk = (&mut reader).take(BUFFER_SIZE as u64);
+                        match chunk.read_to_end(&mut bytes) {
+                            Ok(0) | Err(_) => break,
+                            _ => {
+                                let _ = fd.write(&bytes);
+                            },
+                        }
+
                     }
                 },
             }

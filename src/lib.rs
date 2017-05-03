@@ -16,7 +16,7 @@ use std::hash::Hasher;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::mem;
 
-const BUFFER_SIZE: usize = 64 * 1024;       // 64 KB buffer
+const BUFFER_SIZE: usize = 8 * 1024;        // 8 KB buffer
 
 lazy_static! {
     static ref HASHED: Vec<u64> = {
@@ -33,6 +33,7 @@ lazy_static! {
 enum ProcessType {
     Ping,
     Execute,
+    Write,
     Shutdown,           // NOTE: This should always be the last variant.
 }
 
