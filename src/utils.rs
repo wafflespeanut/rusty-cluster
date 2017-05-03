@@ -7,9 +7,8 @@ const SPACE: u8 = 32;
 
 /// Based on DJB2 - http://www.cse.yorku.ca/~oz/hash.html
 ///
-/// This is very simple and very fast. For its magic number (5381), it produces
-/// unique hashes for all numbers in the range 0..8448 (regardless of their types)
-/// Anything beyond that range will be a collision.
+/// This is very simple and very fast, and is more than enough to
+/// produce unique hashes for enum variants.
 pub struct DjB2(u64);
 
 impl DjB2 {
@@ -39,6 +38,10 @@ pub fn split_args(bytes: Vec<u8>) -> Vec<String> {
             SINGLE_QUOTE | DOUBLE_QUOTE => match last_open {
                 Some(b) if byte == b => {
                     last_open = None;
+                    continue
+                },
+                None => {
+                    last_open = Some(byte);
                     continue
                 },
                 _ => (),

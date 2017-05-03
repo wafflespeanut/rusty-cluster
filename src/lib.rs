@@ -16,7 +16,7 @@ use std::hash::Hasher;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::mem;
 
-const BUFFER_SIZE: usize = 8192;
+const BUFFER_SIZE: usize = 64 * 1024;       // 64 KB buffer
 
 lazy_static! {
     static ref HASHED: Vec<u64> = {
@@ -30,7 +30,7 @@ lazy_static! {
 
 #[repr(u64)]
 #[derive(PartialEq, Clone, Copy, Debug)]
-pub enum ProcessType {
+enum ProcessType {
     Ping,
     Execute,
     Shutdown,           // NOTE: This should always be the last variant.
@@ -62,7 +62,7 @@ impl ProcessType {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Data<T>(T);
+struct Data<T>(T);
 
 impl<T: Serialize> Data<T> {
     pub fn serialize_into<W: Write>(&self, stream: W) -> Result<(), String> {

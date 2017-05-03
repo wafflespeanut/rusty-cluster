@@ -1,4 +1,4 @@
-use {Data, ProcessType};
+use {BUFFER_SIZE, Data, ProcessType};
 use utils::AsBytes;
 
 use std::collections::HashSet;
@@ -53,22 +53,19 @@ impl Cluster {
         Ok(())
     }
 
-    pub fn execute_at_node<C>(&self, addr: &str, command: C) -> Result<StreamingOutput, String>
+    pub fn execute_at_node<C>(&self, addr: &str, command: &C) -> Result<StreamingOutput, String>
         where C: AsBytes
     {
         let stream = self.connect_with_proc(ProcessType::Execute, addr)?;
-
-        {
-            let data = Data(command.bytes());
-            data.serialize_into(&stream)?;
-        }
-
+        let data = Data(command.bytes());
+        data.serialize_into(&stream)?;
         Ok(StreamingOutput {
-            buf: BufReader::new(stream),
+            buf: BufReader::with_capacity(BUFFER_SIZE, stream),
         })
     }
 
-    pub fn execute_all(&self, command: &str) -> Result<(), String> {
+    #[inline]
+    pub fn execute_all<C: AsBytes>(&self, command: &C) -> Result<(), String> {
         for addr in &self.addrs {
             self.execute_at_node(addr, command)?;
         }
@@ -82,6 +79,9 @@ pub struct StreamingOutput {
 }
 
 impl Iterator for StreamingOutput {
+    // It's bytes because we basically want to print/write the result of
+    // execution, and Write implementors only take byte slices in the end anyway.
+    // So, no reason to convert to strings along the way.
     type Item = Result<Vec<u8>, String>;
 
     fn next(&mut self) -> Option<Self::Item> {

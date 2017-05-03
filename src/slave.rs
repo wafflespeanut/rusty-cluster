@@ -1,7 +1,6 @@
 use {Data, ProcessType, utils};
 
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::mem;
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
 use std::sync::mpsc::{self, Sender, Receiver};
@@ -29,6 +28,18 @@ impl Slave {
             Err(_) => return,
         };
 
+        macro_rules! get_data {
+            ($stream:expr) => {
+                match Data::deserialize_from(&$stream) {
+                    Ok(s) => s.0,
+                    Err(e) => {
+                        let _ = $stream.write(e.as_bytes());
+                        return
+                    },
+                }
+            };
+        }
+
         let sender = self.sender.clone();
         let _ = thread::spawn(move || {
             match proc_type {
@@ -40,36 +51,27 @@ impl Slave {
                     let _ = sender.send(());
                 },
                 ProcessType::Execute => {
-                    let cmd_stream: Vec<u8> = {
-                        let Data(data) = match Data::deserialize_from(&stream) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                let _ = stream.write(e.as_bytes());
-                                return
-                            },
-                        };
-
-                        data
-                    };
-
+                    let cmd_stream: Vec<u8> = get_data!(stream);
                     let mut args = utils::split_args(cmd_stream);
-                    let cmd = mem::replace(&mut args[0], String::new());
+                    let cmd = args.remove(0);
                     if cmd.is_empty() {
                         let _ = stream.write("No input given".as_bytes());
                         return
                     }
 
                     let mut writer = BufWriter::new(stream);
-                    let child = Command::new(cmd).args(&args[1..])
+                    let child = Command::new(cmd).args(&args)
                                                  .stdout(Stdio::piped())
                                                  .stderr(Stdio::piped())
                                                  .spawn();
-                    if let Err(e) = child {
-                        let _ = writer.write(format!("Error running command: {}", e).as_bytes());
-                        return
-                    }
+                    let mut process = match child {
+                        Ok(c) => c,
+                        Err(e) => {     // try to send the error back to the server
+                            let _ = writer.write(format!("Error running command: {}", e).as_bytes());
+                            return
+                        }
+                    };
 
-                    let mut process = child.unwrap();
                     let mut bytes = Vec::new();
                     let mut reader = BufReader::new(process.stdout.as_mut().unwrap());
                     loop {
