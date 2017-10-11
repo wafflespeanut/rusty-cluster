@@ -33,8 +33,9 @@ lazy_static! {
 enum ProcessType {
     Ping,
     Execute,
+    Fetch,
     Write,
-    Shutdown,           // NOTE: This should always be the last variant.
+    Shutdown,   // NOTE: This should always be the last variant.
 }
 
 impl ProcessType {

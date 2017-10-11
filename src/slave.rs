@@ -96,13 +96,29 @@ impl Slave {
                     loop {
                         let mut bytes = Vec::new();
                         let mut chunk = (&mut reader).take(BUFFER_SIZE as u64);
-                        match chunk.read_to_end(&mut bytes) {
+                        let _ = match chunk.read_to_end(&mut bytes) {
+                            Ok(0) | Err(_) => break,
+                            _ => fd.write(&bytes),
+                        };
+                    }
+                },
+                ProcessType::Fetch => {
+                    let path: String = get_data!(stream);
+                    let mut fd = match File::open(&path) {
+                        Ok(f) => BufReader::new(f),
+                        Err(_) => return,
+                    };
+
+                    let mut writer = BufWriter::new(stream);
+                    let mut bytes = Vec::new();
+                    loop {
+                        match fd.read_until(10, &mut bytes) {
                             Ok(0) | Err(_) => break,
                             _ => {
-                                let _ = fd.write(&bytes);
-                            },
+                                let _ = writer.write(&bytes);
+                                bytes.clear();
+                            }
                         }
-
                     }
                 },
             }

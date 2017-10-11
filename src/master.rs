@@ -73,6 +73,17 @@ impl Cluster {
         Ok(())
     }
 
+    pub fn fetch_file_from_node(&self, addr: &str, fetch_path: &str)
+                               -> Result<StreamingOutput, String>
+    {
+        let stream = self.connect_with_proc(ProcessType::Fetch, addr)?;
+        let data = Data(fetch_path);
+        data.serialize_into(&stream)?;
+        Ok(StreamingOutput {
+            buf: BufReader::with_capacity(BUFFER_SIZE, stream),
+        })
+    }
+
     pub fn send_file_to_all<R>(&self, write_path: &str, mut reader: R) -> Result<(), String>
         where R: Read
     {
