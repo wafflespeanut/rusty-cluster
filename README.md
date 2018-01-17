@@ -1,3 +1,3 @@
 ## rusty-cluster
 
-Experiments with TCP-connected machines.
+SSH-like server and client in Rust.

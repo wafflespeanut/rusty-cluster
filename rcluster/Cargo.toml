@@ -1,0 +1,15 @@
+[package]
+name = "rcluster"
+version = "0.1.0"
+authors = ["Ravi Shankar <wafflespeanut@gmail.com>"]
+
+[dependencies]
+chrono = "0.4"
+derive-error = "0.0"
+env_logger = "0.4"
+futures = "0.1"
+log = "0.3"
+rustls = "0.12"
+tokio-core = "0.1"
+tokio-rustls = "0.5"
+webpki = "0.18.0-alpha"
