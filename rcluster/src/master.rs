@@ -18,7 +18,7 @@ impl Master {
         let client_config = Arc::new(config);
 
         let addr = "0.0.0.0:2753".parse().unwrap();
-        let domain = DNSNameRef::try_from_ascii_str("waffles.spy").unwrap();
+        let domain = DNSNameRef::try_from_ascii_str("tls.snoop").unwrap();
         let stream_async = TcpStream::connect(&addr, &handle);
 
         let connection = stream_async
