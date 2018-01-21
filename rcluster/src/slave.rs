@@ -6,6 +6,7 @@ use tokio_io::{io as async_io, AsyncRead};
 use tokio_rustls::ServerConfigExt;
 use utils::DEFAULT_PORT;
 
+use std::io::{self, BufReader, Write};
 use std::net::SocketAddr;
 
 pub struct Slave {
@@ -31,10 +32,12 @@ impl Slave {
             let job = SERVER_CONFIG.accept_async(stream)
                 .and_then(|stream| {
                     let (reader, writer) = stream.split();
-                    async_io::copy(reader, writer)
+                    let reader = BufReader::new(reader);
+                    async_io::read_until(reader, b'\n', Vec::new())
+                             .and_then(|(_, output)| io::stdout().write_all(&output))
+                             .and_then(|_| async_io::write_all(writer, &b"pong\n"[..]))
                 })
-                .and_then(|(_, _reader, writer)| async_io::flush(writer))
-                .map(move |_| info!("Accepted connection from {:?}", addr))
+                .map(move |_| debug!("Finished serving {:?}", addr))
                 .map_err(move |e| error!("Error in stream from {}: {:?}", addr, e));
 
             handle.spawn(job);

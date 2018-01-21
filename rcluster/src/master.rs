@@ -2,7 +2,7 @@ use config::CLIENT_CONFIG;
 use futures::Future;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
-use tokio_io::{io as async_io};
+use tokio_io::{io as async_io, AsyncRead};
 use tokio_rustls::ClientConfigExt;
 use webpki::DNSNameRef;
 
@@ -21,9 +21,12 @@ impl Master {
 
         let connection = stream_async
             .and_then(|stream| CLIENT_CONFIG.connect_async(domain, stream))
-            .and_then(|stream| async_io::write_all(stream, &b"ping"[..]))
-            .and_then(|(stream, _)| async_io::read_to_end(stream, Vec::new()))
-            .and_then(|(_, output)| io::stdout().write_all(&output));
+            .and_then(|stream| async_io::write_all(stream, &b"ping\n"[..]))
+            .and_then(|(stream, _)| {
+                let (reader, _) = stream.split();
+                async_io::read_to_end(reader, Vec::new())
+                         .and_then(|(_, output)| io::stdout().write_all(&output))
+            });
 
         core.run(connection).unwrap();
     }

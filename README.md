@@ -1,3 +1,3 @@
 ## rusty-cluster
 
-SSH-like server and client in Rust.
+SSH-like server and client (using TLS) in Rust.
