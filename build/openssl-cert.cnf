@@ -1,20 +1,17 @@
-[req]
-x509_extensions = v3_req
-distinguished_name = req_distinguished_name
-prompt = no
-
-[req_distinguished_name]
-C = IN
-ST = TN
-L = Chennai
-O = Blume
-OU = ctOS
-CN = tls.snoop
-
-[v3_req]
-basicConstraints = CA:FALSE
-keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+[ v3_end ]
+basicConstraints = critical,CA:false
+keyUsage = nonRepudiation, digitalSignature
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
 subjectAltName = @alt_names
 
-[alt_names]
+[ v3_client ]
+basicConstraints = critical,CA:false
+keyUsage = nonRepudiation, digitalSignature
+extendedKeyUsage = critical, clientAuth
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
+
+[ alt_names ]
 DNS.1 = tls.snoop
+DNS.2 = snoop.fetch

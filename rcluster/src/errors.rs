@@ -1,6 +1,6 @@
 use std::io;
 
-pub type ClusterResult<T> = Result<T, ClusterError>;
+// pub type ClusterResult<T> = Result<T, ClusterError>;
 
 #[derive(Debug, Error)]
 pub enum ClusterError {
