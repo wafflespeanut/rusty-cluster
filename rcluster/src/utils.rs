@@ -1,10 +1,16 @@
 use chrono::offset::Utc;
 use env_logger::LogBuilder;
 use log::{LogRecord, LogLevelFilter};
+use webpki::DNSNameRef;
 
 use std::env;
 
-pub const DEFAULT_PORT: u16 = 2753;
+pub const DEFAULT_ADDRESS: &'static str = "0.0.0.0:2753";
+
+lazy_static! {
+    pub static ref DOMAIN: DNSNameRef<'static> =
+        DNSNameRef::try_from_ascii_str("snoop.fetch").unwrap();
+}
 
 /// Prepare the logger with the universal datetime format and INFO level.
 pub fn prepare_logger() {
