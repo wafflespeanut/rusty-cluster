@@ -10,9 +10,11 @@ use tokio_rustls::TlsStream;
 
 use std::io::{BufReader, BufWriter};
 
+/// Length of the random separator used in a connection for boundaries.
 pub const MAGIC_LENGTH: usize = 16;
 
 enum_from_primitive! {
+    /// Different flags which represent the goal of the request/response.
     #[repr(u8)]
     #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum ConnectionFlag {
@@ -24,10 +26,18 @@ enum_from_primitive! {
     }
 }
 
+/// Outgoing stream from master (i.e., client)
 pub type OutgoingStream = TlsStream<TcpStream, ClientSession>;
+/// Incoming stream for slave (i.e., server)
 type IncomingStream = TlsStream<TcpStream, ServerSession>;
+/// Deconstructed version of a connection. This exists so that we can deconstruct
+/// the struct, pass the necessary values for executing a future and reconstruct it back.
+/// FIXME: There may be a better way to do this.
 type ConnectionParts<S> = (BufReader<ReadHalf<S>>, BufWriter<WriteHalf<S>>, [u8; MAGIC_LENGTH]);
 
+/// Represents a connection (for master/slave). This is called immediately after
+/// `connect_async` or `accept_async` (from TLS). All methods of this struct resolve
+/// to a future, and so they all can be connected.
 pub struct Connection<S: AsyncRead + AsyncWrite> {
     reader: BufReader<ReadHalf<S>>,
     writer: BufWriter<WriteHalf<S>>,
@@ -58,6 +68,10 @@ impl<S> Into<ConnectionParts<S>> for Connection<S>
 impl<S> Connection<S>
     where S: AsyncRead + AsyncWrite + 'static
 {
+    /// Create a connection object for an incoming/outgoing stream. If the `bool` is set
+    /// to `true`, then this assumes that the connection is incoming and expects a
+    /// a set of bytes (which I call "magic") which begins the connection. Or else, this
+    /// assumes that the connection is outgoing, and so it writes the "magic" bytes.
     pub fn create_for_stream(stream: S, expect_magic: bool) -> ClusterFuture<Self> {
         let (r, w) = stream.split();
         let (reader, writer) = (BufReader::new(r), BufWriter::new(w));
@@ -72,6 +86,7 @@ impl<S> Connection<S>
         }
     }
 
+    /// Write bytes to the "writable half" of this connection and flush the stream.
     #[inline]
     pub fn write_bytes<B>(self, bytes: B) -> ClusterFuture<Self>
         where B: AsRef<[u8]> + 'static
@@ -84,6 +99,9 @@ impl<S> Connection<S>
         Box::new(async_write) as ClusterFuture<Self>
     }
 
+    /// Read the magic bytes from this connection. Note that this changes
+    /// the magic bytes that already exist in `self` (because we use only one
+    /// set of bytes throughout a connection).
     #[inline]
     pub fn read_magic(self) -> ClusterFuture<Self> {
         let (reader, writer, _) = self.into();
@@ -93,12 +111,15 @@ impl<S> Connection<S>
         Box::new(async_read) as ClusterFuture<Self>
     }
 
+    /// Write the magic to this connection's stream.
     #[inline]
     pub fn write_magic(self) -> ClusterFuture<Self> {
         let m = self.magic;
         self.write_bytes(m)
     }
 
+    /// Read flag from this stream. Essentially, a flag is just a byte,
+    /// and so if it fails, this will return a future that resolves to an error.
     #[inline]
     pub fn read_flag(self) -> ClusterFuture<(Self, ConnectionFlag)> {
         let (r, w, m) = self.into();
@@ -106,19 +127,22 @@ impl<S> Connection<S>
             .map_err(ClusterError::from)
             .and_then(move |(r, flag_byte)| {
                 let flag = ConnectionFlag::from_u8(flag_byte[0])
-                                           .ok_or(ClusterError::UnknownFlag);
+                                          .ok_or(ClusterError::UnknownFlag);
                 info!("Got flag: {:?}", flag);
                 future::result(flag.map(move |f| ((r, w, m).into(), f)))
             });
         Box::new(async_handle) as ClusterFuture<(Self, ConnectionFlag)>
     }
 
+    /// Write the given flag to this stream.
     #[inline]
     pub fn write_flag(self, flag: ConnectionFlag) -> ClusterFuture<Self> {
         let flag: [u8; 1] = [flag as u8];
         self.write_bytes(flag)
     }
 
+    /// The next byte in the `IncomingStream` is a flag. Read it and use
+    /// appropriate methods to handle it. This is meant for the slave.
     #[inline]
     fn handle_flags(self) -> ClusterFuture<Self> {
         let async_handle = self.read_flag().and_then(|(conn, flag)| {
@@ -127,7 +151,7 @@ impl<S> Connection<S>
                 _ => {
                     error!("Dunno how to handle {:?}", flag);
                     Box::new(future::ok(conn)) as ClusterFuture<Self>
-                }
+                },
             })
         });
 
@@ -135,6 +159,7 @@ impl<S> Connection<S>
     }
 }
 
+/// Handle an incoming connectiion to the slave.
 #[inline]
 pub fn handle_incoming(stream: IncomingStream) -> ClusterFuture<()> {
     let async_conn = Connection::create_for_stream(stream, true)

@@ -20,9 +20,10 @@ pub struct Options {
 
 fn handle_request() -> ClusterResult<()> {
     let options = Options::from_args();
-    let mut master = Master::connect(options.address)?;
+    let mut master = Master::new();
+    let id = master.add_slave(options.address)?;
     if options.ping {
-        master.ping()?;
+        master.ping(id)?;
         println!("Successfully pinged slave!");
     }
 

@@ -9,29 +9,52 @@ use utils::DOMAIN;
 
 use std::net::SocketAddr;
 
+/// Master (i.e., client) which connects to slave machines. As long as this struct exists,
+/// the sockets added will be kept alive, and so we can re-use it for further messages.
 pub struct Master {
     event_loop: Core,
-    slave: Option<Connection<OutgoingStream>>,
+    slaves: Vec<Option<Connection<OutgoingStream>>>,
+    addrs: Vec<SocketAddr>,
 }
 
 impl Master {
-    pub fn connect(addr: SocketAddr) -> ClusterResult<Self> {
-        let mut core = Core::new().expect("event loop creation");
-        let handle = core.handle();
+    /// Create a new instance of master.
+    pub fn new() -> Self {
+        Master {
+            event_loop: Core::new().expect("event loop creation"),
+            slaves: vec![],
+            addrs: vec![],
+        }
+    }
+
+    /// List of addresses to which we've successfully connected.
+    pub fn addrs(&self) -> &[SocketAddr] {
+        &self.addrs
+    }
+
+    /// Connect to an address and push the socket to the list of slave sockets.
+    /// Once the connection has been established, this returns an ID for the connection,
+    /// which should be used for future actions.
+    pub fn add_slave(&mut self, addr: SocketAddr) -> ClusterResult<usize> {
+        let handle = self.event_loop.handle();
         let stream_async = TcpStream::connect(&addr, &handle)
             .and_then(|stream| CLIENT_CONFIG.connect_async(DOMAIN.clone(), stream))
             .map_err(ClusterError::from)
             .and_then(|stream| Connection::create_for_stream(stream, false));
 
-        let stream = core.run(stream_async)?;
-        Ok(Master {
-            event_loop: core,
-            slave: Some(stream),
-        })
+        let stream = self.event_loop.run(stream_async)?;
+        self.slaves.push(Some(stream));
+        self.addrs.push(addr);
+        Ok(self.slaves.len() - 1)
     }
 
-    pub fn ping(&mut self) -> ClusterResult<()> {
-        let conn = self.slave.take().unwrap();
+    /// Ping the connection belonging to a given ID (if it exists).
+    pub fn ping(&mut self, conn_id: usize) -> ClusterResult<()> {
+        if conn_id > self.slaves.len() {
+            return Err(ClusterError::InvalidConnectionId)
+        }
+
+        let conn = self.slaves[conn_id].take().unwrap();
         let async_conn = conn.write_flag(ConnectionFlag::MasterPing)
             .and_then(|c| c.read_magic())
             .and_then(|c| c.read_flag());
@@ -41,7 +64,7 @@ impl Master {
             info!("Expected pong, but got {:?}", flag);
         }
 
-        self.slave = Some(conn);
+        self.slaves[conn_id] = Some(conn);
         Ok(())
     }
 }

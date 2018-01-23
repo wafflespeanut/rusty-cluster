@@ -13,6 +13,7 @@ fn main() {
     config_path.push("build");
     config_path.push(".openssl");
 
+    // loads the given file and tells cargo to rebuild if the file has changed.
     macro_rules! load {
         ($file_name:expr) => {
             {
@@ -33,7 +34,7 @@ fn main() {
     let root_cert = load!("root_ca.cert");
 
     // `config.rs` is used by both master and slave.
-    // (it contains secrets packed and shipped along with the executables)
+    // (it contains keys and certs packed and shipped along with the executables).
     let source_path = PathBuf::from(&out_dir).join("config.rs");
     let contents = format!("
 mod config {{
@@ -68,6 +69,8 @@ mod config {{
             let slave_certs = load_cert(_SLAVE_CERTS);
             let master_key = load_key(_MASTER_KEY);
             let master_certs = load_cert(_MASTER_CERTS);
+
+            // Both the client and server share the root cert store for verifying certs.
 
             let mut root_ca_reader = BufReader::new(_CA_CERT);
             let mut root_store = RootCertStore::empty();

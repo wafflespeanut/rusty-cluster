@@ -5,9 +5,12 @@ use webpki::DNSNameRef;
 
 use std::env;
 
+/// Default address to listen to connections.
 pub const DEFAULT_ADDRESS: &'static str = "0.0.0.0:2753";
 
 lazy_static! {
+    /// Domain name used for verifying the connection. This should match
+    /// the DNS in the openssl configuration.
     pub static ref DOMAIN: DNSNameRef<'static> =
         DNSNameRef::try_from_ascii_str("snoop.fetch").unwrap();
 }

@@ -10,28 +10,30 @@ create-certs:
 	fi
 
 	mkdir $(OUT_DIR)
+	# Root CA private key and cert
 	openssl req -nodes -newkey rsa:4096 -x509 \
 		-keyout $(ROOT_CA).key -out $(ROOT_CA).cert \
 		-sha256 -days 7500 -batch -subj "/CN=TLS snoop RSA CA"
 
+	# Master and slave private key and CSR
+	openssl req -nodes -newkey rsa:4096 -keyout $(MASTER).key \
+		-out $(MASTER).req -sha256 -batch -subj "/CN=snooper client"
 	openssl req -nodes -newkey rsa:4096 -keyout $(SLAVE).key \
 		-out $(SLAVE).req -sha256 -batch -subj "/CN=tls.snoop"
 
+	# Master and slave keys in RSA
 	openssl rsa -in $(SLAVE).key -out $(SLAVE).rsa
-
-	openssl req -nodes -newkey rsa:4096 -keyout $(MASTER).key -out $(MASTER).req \
-		-sha256 -batch -subj "/CN=snooper client"
-
 	openssl rsa -in $(MASTER).key -out $(MASTER).rsa
 
+	# sign both certs using CA key
 	openssl x509 -req -in $(SLAVE).req -out $(SLAVE).cert -CA $(ROOT_CA).cert \
 		-CAkey $(ROOT_CA).key -sha256 -days 3650 -set_serial 456 \
 		-extensions v3_end -extfile $(CONFIG)
-
 	openssl x509 -req -in $(MASTER).req -out $(MASTER).cert -CA $(ROOT_CA).cert \
 		-CAkey $(ROOT_CA).key -sha256 -days 3650 -set_serial 789 \
 		-extensions v3_client -extfile $(CONFIG)
 
+	# Create cert full chains
 	cat $(SLAVE).cert $(ROOT_CA).cert > $(SLAVE).fullchain
 	cat $(MASTER).cert $(ROOT_CA).cert > $(MASTER).fullchain
 
