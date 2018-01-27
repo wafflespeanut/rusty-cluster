@@ -5,7 +5,7 @@ use webpki::DNSNameRef;
 
 use std::env;
 
-/// Default address to listen to connections.
+/// Default address for the listener.
 pub const DEFAULT_ADDRESS: &'static str = "0.0.0.0:2753";
 
 lazy_static! {

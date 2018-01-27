@@ -1,3 +1,4 @@
+use buffered::StreamingBuffer;
 use config::CLIENT_CONFIG;
 use connection::{Connection, ConnectionFlag, OutgoingStream};
 use errors::{ClusterError, ClusterResult};
@@ -50,21 +51,56 @@ impl Master {
 
     /// Ping the connection belonging to a given ID (if it exists).
     pub fn ping(&mut self, conn_id: usize) -> ClusterResult<()> {
-        if conn_id > self.slaves.len() {
-            return Err(ClusterError::InvalidConnectionId)
-        }
-
-        let conn = self.slaves[conn_id].take().unwrap();
+        let conn = self.get_conn(conn_id)?;
         let async_conn = conn.write_flag(ConnectionFlag::MasterPing)
             .and_then(|c| c.read_magic())
             .and_then(|c| c.read_flag());
 
         let (conn, flag) = self.event_loop.run(async_conn)?;
-        if flag != ConnectionFlag::SlavePong {
+        if flag != ConnectionFlag::SlaveOk {
             info!("Expected pong, but got {:?}", flag);
         }
 
         self.slaves[conn_id] = Some(conn);
         Ok(())
+    }
+
+    pub fn send_file<P>(&mut self, conn_id: usize,
+                        source_path: P, dest_path: P) -> ClusterResult<()>
+        where P: AsRef<str>
+    {
+        let conn = self.get_conn(conn_id)?;
+        let source = String::from(source_path.as_ref());
+        let dest = String::from(dest_path.as_ref());
+
+        let async_conn = conn.write_flag(ConnectionFlag::MasterSendsFile)
+            .and_then(move |c| c.write_bytes(dest.into_bytes()))
+            .and_then(|c| c.write_bytes(&[b'\n']))
+            .and_then(move |c| {
+                let (r, w, m) = c.into();
+                StreamingBuffer::file_to_stream(source, w)
+                                .and_then(|s| s)
+                                .map(move |(_fd, w)| Connection::from((r, w, m)))
+            }).and_then(|c| c.write_magic())
+            .and_then(|c| c.read_magic())
+            .and_then(|c| c.read_flag());
+
+        let (conn, flag) = self.event_loop.run(async_conn)?;
+        if flag != ConnectionFlag::SlaveOk {
+            info!("Error sending file!");
+        }
+
+        self.slaves[conn_id] = Some(conn);
+        Ok(())
+    }
+
+    /// Get the connection corresponding to the given ID. Panics if this has been
+    /// done before and the connection hasn't been set.
+    fn get_conn(&mut self, id: usize) -> ClusterResult<Connection<OutgoingStream>> {
+        if id > self.slaves.len() {
+            return Err(ClusterError::InvalidConnectionId)
+        }
+
+        Ok(self.slaves[id].take().expect("connection has been robbed"))
     }
 }

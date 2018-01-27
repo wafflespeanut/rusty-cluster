@@ -15,6 +15,7 @@ extern crate webpki;
 
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
+mod buffered;
 mod connection;
 pub mod errors;
 mod master;

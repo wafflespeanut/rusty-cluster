@@ -9,13 +9,35 @@ use structopt::StructOpt;
 use std::error::Error;
 use std::net::SocketAddr;
 
-// Structure solely for obtaining the command-line arguments.
 #[derive(StructOpt, Debug)]
-pub struct Options {
+enum FileSync {
+    #[structopt(name = "send")]
+    /// Send file to slave machine
+    SendOne {
+        #[structopt(long = "from")]
+        source: String,
+        #[structopt(long = "to")]
+        dest: String,
+    },
+    #[structopt(name = "receive")]
+    /// Receive file from slave machine
+    ReceiveOne {
+        #[structopt(long = "from")]
+        source: String,
+        #[structopt(long = "to")]
+        dest: String,
+    }
+}
+
+// Structure solely for obtaining the command-line arguments.
+#[derive(StructOpt)]
+struct Options {
     #[structopt(help = "Address of slave machine")]
     address: SocketAddr,
     #[structopt(short = "p", long = "ping", help = "Ping the slave service")]
     ping: bool,
+    #[structopt(subcommand)]
+    file: Option<FileSync>,
 }
 
 fn handle_request() -> ClusterResult<()> {
@@ -25,6 +47,14 @@ fn handle_request() -> ClusterResult<()> {
     if options.ping {
         master.ping(id)?;
         println!("Successfully pinged slave!");
+    }
+
+    match options.file {
+        Some(FileSync::SendOne { source, dest }) => {
+            master.send_file(id, source, dest)?;
+            println!("Successfully sent file!");
+        },
+        _ => (),
     }
 
     Ok(())
