@@ -74,37 +74,46 @@ impl<R> StreamingBuffer<R, File>
 }
 
 /// Status of this streamer. This determines whether the streaming should continue/stop.
-#[derive(Copy, Clone, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 enum StreamerStatus {
+    /// Some of the bytes in the end of the current chunk match with the stopper's prefix.
+    /// This variant carries "N" - check the first 'N' bytes from the next chunk against
+    /// stopper's suffix.
     StopperPrefixFound(usize),
+    /// Stopper byte found at Nth "index"
     StopperFound(usize),
+    /// Stopper's suffix (of length "N" in this variant) matches with the first "N" bytes in chunk.
     StopperExtendsFromPrevious(usize),
+    /// All bytes from previous chunk are wasted - they have to passed to the writer.
     PreviousBytesWasted,
+    /// Stopper not found in this chunk.
     StopperNotFound,
 }
 
 impl<R, W> StreamingBuffer<R, W>
     where R: Read, W: Write
 {
+    /// Check the previously unwritten bytes (with the new chunk) for possible stopper.
     fn check_previous_bytes_with(&mut self, parent_bytes: &[u8]) {
         let stop_len = self.stop_bytes.len();
         if let StreamerStatus::StopperPrefixFound(len) = self.status.get() {
             if parent_bytes.starts_with(&self.stop_bytes[(stop_len - len)..]) {
                 self.status.set(StreamerStatus::StopperExtendsFromPrevious(len));
+                return
             }
         }
 
         self.status.set(StreamerStatus::PreviousBytesWasted);
     }
 
-    /// Isolate some bytes for checking against magic during next poll.
-    /// This returns the number of bytes to be consumed in the reader.
+    /// Isolate some bytes for checking against magic during the incoming of next chunk from buffer.
     fn check_suffix_bytes<'a>(&mut self, parent_bytes: &'a [u8]) {
         if parent_bytes.is_empty() {
             return
         }
 
         if let StreamerStatus::StopperExtendsFromPrevious(_) = self.status.get() {
+            // Stopper found - we no longer need to stream, so we don't care now!
             return
         }
 
@@ -137,14 +146,14 @@ impl<R, W> StreamingBuffer<R, W>
         self.status.set(StreamerStatus::StopperNotFound);
     }
 
+    /// Get the suffix bytes from previous chunk (which haven't been written yet)
     #[inline]
     fn get_unwritten_bytes(&self) -> Option<&[u8]> {
         match self.status.get() {
-            StreamerStatus::StopperExtendsFromPrevious(len) => {
-                let remaining = self.prev_bytes_unwritten.len() - (self.stop_bytes.len() - len);
-                Some(&self.prev_bytes_unwritten[..remaining])
-            },
-            StreamerStatus::PreviousBytesWasted => Some(&self.prev_bytes_unwritten),
+            StreamerStatus::StopperExtendsFromPrevious(len) =>
+                Some(&self.prev_bytes_unwritten[..len]),
+            StreamerStatus::PreviousBytesWasted =>
+                Some(&self.prev_bytes_unwritten),
             _ => None,
         }
     }
@@ -164,6 +173,7 @@ impl<R, W> StreamingBuffer<R, W>
                     let bytes = r.fill_buf()?;
 
                     let (consume_amt, write_amt) = if self.stop_bytes.is_empty() {
+                        // If there's no stopper, then we consume and write everything.
                         (bytes.len(), bytes.len())
                     } else {
                         self.check_previous_bytes_with(bytes);
@@ -179,7 +189,7 @@ impl<R, W> StreamingBuffer<R, W>
                             },
                             StreamerStatus::StopperExtendsFromPrevious(suffix_len) => {
                                 content_ended = true;
-                                return Ok(suffix_len)
+                                (suffix_len, 0)
                             },
                             _ => (bytes.len(), bytes.len().saturating_sub(self.stop_bytes.len())),
                         }
@@ -213,5 +223,84 @@ impl<R, W> StreamingBuffer<R, W>
         }
 
         Box::new(future::ok((r, w))) as ClusterFuture<_>
+    }
+}
+
+/* Tests */
+
+#[cfg(test)]
+mod tests {
+    use futures::Future;
+    use rand::{self, Rng};
+    use super::{StreamingBuffer, StreamerStatus};
+
+    use std::cell::Cell;
+    use std::io::{BufRead, BufReader, BufWriter, Cursor};
+
+    impl StreamingBuffer<Cursor<Vec<u8>>, Vec<u8>> {
+        fn new(bytes: Vec<u8>, write_bytes: Vec<u8>, cap: usize, stop: &[u8]) -> Self {
+            StreamingBuffer {
+                reader: Some(BufReader::with_capacity(cap, Cursor::new(bytes))),
+                writer: Some(BufWriter::with_capacity(cap, write_bytes)),
+                stop_bytes: stop.into(),
+                prev_bytes_unwritten: Box::new([]),
+                status: Cell::new(StreamerStatus::StopperNotFound),
+            }
+        }
+    }
+
+    /// Test that the streamer successfully streams when the stream is more than its capacity.
+    #[test]
+    fn test_stream_more_than_capacity() {
+        let mut buf = [0; 32 * 1024];       // 32 kB stream
+        let mut rng = rand::thread_rng();
+        rng.fill_bytes(&mut buf);
+
+        let buf = Vec::from(&buf[..]);
+        let streamer = StreamingBuffer::new(buf, Vec::new(), 256, &[]);     // 256 byte buffer
+        let (r, w) = streamer.stream().wait().unwrap();
+        let (buf, out) = (r.into_inner().into_inner(), w.into_inner().unwrap());
+        assert_eq!(&buf[..], &out[..]);
+    }
+
+    /// Test that the streamer stops once it encounters the "stopper" bytes at EOF - when it
+    /// flushes everything other than the stopper to the writer.
+    #[test]
+    fn test_stream_with_trailing_stopper() {
+        let mut buf = [0; 256];
+        let mut rng = rand::thread_rng();
+        rng.fill_bytes(&mut buf);
+
+        let stop_bytes = &buf[248..];       // assume that last 8 bytes indicate stopper bytes.
+        let buf = Vec::from(&buf[..]);
+        let streamer = StreamingBuffer::new(buf, Vec::new(), 16, stop_bytes);
+        let (r, w) = streamer.stream().wait().unwrap();
+        let (buf, out) = (r.into_inner().into_inner(), w.into_inner().unwrap());
+        assert_eq!(&buf[..248], &out[..]);      // last 8 bytes have been ignored
+    }
+
+    /// The streamer should detect when the stopper bytes are split by buffered reading, and it
+    /// should bail out successfully.
+    #[test]
+    fn test_stream_with_stopper_shared_between() {
+        let mut buf = [0; 256];
+        let mut rng = rand::thread_rng();
+        rng.fill_bytes(&mut buf);
+
+        // When the buffer size is 16, some of the stopper will be in the first buffer,
+        // and the remaining will be in the next.
+        let stop_bytes = &buf[14..22];
+        let input = Vec::from(&buf[..]);
+        let streamer = StreamingBuffer::new(input, Vec::new(), 16, stop_bytes);
+        let (mut r, w) = streamer.stream().wait().unwrap();
+        {   // Check that `BufReader` cursor is at 22 (i.e., after consuming stopper)
+            let remaining = r.fill_buf().unwrap();
+            assert_eq!(remaining, &buf[22..32]);
+        }
+
+        let cursor = r.into_inner();
+        assert_eq!(cursor.position(), 32);      // Actual cursor moved to the end of second chunk
+        let out = w.into_inner().unwrap();
+        assert_eq!(&buf[..14], &out[..]);       // Writer has everything until the stopper
     }
 }
