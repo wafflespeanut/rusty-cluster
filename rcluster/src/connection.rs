@@ -147,9 +147,9 @@ impl<S> Connection<S>
         let async_handle = async_io::read_until(r, b'\n', Vec::new())
             .map_err(ClusterError::from)
             .and_then(move |(r, bytes)| {
-                let path_str = String::from_utf8_lossy(&bytes);
+                let path_str = String::from_utf8_lossy(&bytes[..bytes.len() - 1]);
                 StreamingBuffer::stream_to_file(r, &m, &*path_str)
-                                .and_then(|s| s)
+                                .and_then(|s| s.stream())
                                 .map(move |(r, _fd)| (r, w, m))
             }).and_then(|(r, w, m)| {
                 Connection::from((r, w, m)).write_flag(ConnectionFlag::SlaveOk)

@@ -1,15 +1,18 @@
 use errors::{ClusterError, ClusterFuture};
-use futures::{Async, Future, Poll, future};
-use tokio_io::{AsyncRead, AsyncWrite};
-use tokio_io::io::{self as async_io};
+use futures::future;
 
 use std::cell::Cell;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Write};
 use std::path::Path;
 
+/// Buffer size used throughout the library.
 pub const BUFFER_SIZE: usize = 8 * 1024;
 
+/// A "streamer" used on read/write halves for streaming stuff (like files, command output, etc.).
+/// It works much like multipart data. In the read end of the stream, this checks for magic
+/// bytes - once it encounters them, it consumes those bytes and stops reading. Hence, the reader's
+/// cursor will be positioned just after the magic bytes.
 pub struct StreamingBuffer<R: Read, W: Write> {
     reader: Option<BufReader<R>>,
     writer: Option<BufWriter<W>>,
@@ -21,11 +24,13 @@ pub struct StreamingBuffer<R: Read, W: Write> {
 impl<W> StreamingBuffer<File, W>
     where W: Write + 'static
 {
+    /// Initialize this struct for reading file onto a stream.
     #[inline]
     pub fn file_to_stream<P>(path: P, stream: BufWriter<W>)
                             -> ClusterFuture<Self>
         where P: AsRef<Path>
     {
+        info!("Reading from {}", path.as_ref().display());
         let reader = File::open(path).map(|f| BufReader::with_capacity(BUFFER_SIZE, f)).map(Some);
         let async_streamer = reader.map(|reader| {
             StreamingBuffer {
@@ -44,11 +49,15 @@ impl<W> StreamingBuffer<File, W>
 impl<R> StreamingBuffer<R, File>
     where R: Read + 'static
 {
+    /// Initialize this struct for writing to file from a stream. Note that this requires
+    /// the magic bytes after which the streaming should be stopped. If the magic bytes are
+    /// empty, then the entire stream (until EOF) is written to file.
     #[inline]
     pub fn stream_to_file<P>(stream: BufReader<R>, stop_bytes: &[u8], path: P)
                             -> ClusterFuture<Self>
         where P: AsRef<Path>
     {
+        info!("Writing to {}", path.as_ref().display());
         let writer = File::create(path).map(|f| BufWriter::with_capacity(BUFFER_SIZE, f)).map(Some);
         let async_streamer = writer.map(|writer| {
             StreamingBuffer {
@@ -64,144 +73,145 @@ impl<R> StreamingBuffer<R, File>
     }
 }
 
+/// Status of this streamer. This determines whether the streaming should continue/stop.
 #[derive(Copy, Clone, PartialEq)]
 enum StreamerStatus {
     StopperPrefixFound(usize),
     StopperFound(usize),
-    StopperFoundWithPrevious(usize),
-    StopperPrefixWasted,
+    StopperExtendsFromPrevious(usize),
+    PreviousBytesWasted,
     StopperNotFound,
 }
 
 impl<R, W> StreamingBuffer<R, W>
     where R: Read, W: Write
 {
-    fn check_previous_bytes_with(&self, parent_bytes: &[u8]) -> Option<StreamerStatus> {
-        let stopper_prefix = &self.stop_bytes;
-        let stop_len = stopper_prefix.len();
-        if let StreamerStatus::StopperPrefixFound(i) = self.status.get() {
-            let stopper = &stopper_prefix[(stop_len - i)..];
-            if parent_bytes.starts_with(&stopper) {
-                return Some(StreamerStatus::StopperFoundWithPrevious(i))
-            } else {
-                return Some(StreamerStatus::StopperPrefixWasted)
+    fn check_previous_bytes_with(&mut self, parent_bytes: &[u8]) {
+        let stop_len = self.stop_bytes.len();
+        if let StreamerStatus::StopperPrefixFound(len) = self.status.get() {
+            if parent_bytes.starts_with(&self.stop_bytes[(stop_len - len)..]) {
+                self.status.set(StreamerStatus::StopperExtendsFromPrevious(len));
             }
         }
 
-        None
+        self.status.set(StreamerStatus::PreviousBytesWasted);
     }
 
     /// Isolate some bytes for checking against magic during next poll.
     /// This returns the number of bytes to be consumed in the reader.
-    fn check_suffix_bytes<'a>(&self, parent_bytes: &'a [u8]) -> (&'a [u8], StreamerStatus) {
+    fn check_suffix_bytes<'a>(&mut self, parent_bytes: &'a [u8]) {
+        if parent_bytes.is_empty() {
+            return
+        }
+
+        if let StreamerStatus::StopperExtendsFromPrevious(_) = self.status.get() {
+            return
+        }
+
         let parent_len = parent_bytes.len();
         let stop_len = self.stop_bytes.len();
 
-        let unwritten = if parent_bytes.len() >= stop_len {
-            &parent_bytes[(parent_len - stop_len)..]
+        self.prev_bytes_unwritten = if parent_bytes.len() >= stop_len {
+            parent_bytes[(parent_len - stop_len)..].into()
         } else {
-            &parent_bytes
+            parent_bytes.into()
         };
 
-        let mut stopper_prefix = &self.stop_bytes[..];
-        let mut prev_suffix = &self.prev_bytes_unwritten[..];
+        let prev_suffix = &self.prev_bytes_unwritten[..];
+        let stopper_prefix = &self.stop_bytes[..];
         for i in 0..prev_suffix.len() {
-            prev_suffix = &prev_suffix[i..];
-            stopper_prefix = &stopper_prefix[..prev_suffix.len()];
-            if prev_suffix.starts_with(stopper_prefix) {
-                let remaining = stop_len - prev_suffix.len();
+            let prev = &prev_suffix[i..];
+            let stopper = &stopper_prefix[..prev.len()];
+            if prev.starts_with(stopper) {
+                let remaining = stop_len - prev.len();
                 if remaining == 0 {
-                    return (unwritten, StreamerStatus::StopperFound(parent_len))
+                    self.status.set(StreamerStatus::StopperFound(parent_len - stop_len));
+                    return
                 } else {
-                    return (unwritten, StreamerStatus::StopperPrefixFound(remaining))
+                    self.status.set(StreamerStatus::StopperPrefixFound(remaining));
+                    return
                 }
             }
         }
 
-        (unwritten, StreamerStatus::StopperNotFound)
+        self.status.set(StreamerStatus::StopperNotFound);
     }
 
     #[inline]
-    fn get_unwritten_bytes_from_status(&self, status: StreamerStatus) -> Option<&[u8]> {
-        match status {
-            StreamerStatus::StopperFoundWithPrevious(i) => {
-                let bytes = &self.prev_bytes_unwritten;
-                let remaining = bytes.len() - (self.stop_bytes.len() - i);
-                Some(&bytes[..remaining])
+    fn get_unwritten_bytes(&self) -> Option<&[u8]> {
+        match self.status.get() {
+            StreamerStatus::StopperExtendsFromPrevious(len) => {
+                let remaining = self.prev_bytes_unwritten.len() - (self.stop_bytes.len() - len);
+                Some(&self.prev_bytes_unwritten[..remaining])
             },
-            StreamerStatus::StopperPrefixWasted => Some(&self.prev_bytes_unwritten),
+            StreamerStatus::PreviousBytesWasted => Some(&self.prev_bytes_unwritten),
             _ => None,
         }
     }
 }
 
-impl<R, W> Future for StreamingBuffer<R, W>
-    where R: Read, W: Write
+impl<R, W> StreamingBuffer<R, W>
+    where R: Read + 'static, W: Write + 'static
 {
-    type Item = (BufReader<R>, BufWriter<W>);
-    type Error = ClusterError;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    /// Start streaming. This returns a future that resolves to the read/write halves.
+    pub fn stream(mut self) -> ClusterFuture<(BufReader<R>, BufWriter<W>)> {
         let (mut r, mut w) = (self.reader.take().unwrap(), self.writer.take().unwrap());
 
         let mut content_ended = false;
-        let consumed = {
-            // Step 1 - fill the internal buffer
-            let bytes = r.fill_buf()?;
-            // Step 2 - Get the amount of bytes in this buffer.
-            // NOTE: This will be equal to `BUFFER_SIZE` (unless previously read or if the
-            // stream is about to end).
-            info!("Read: {}", bytes.len());
+        loop {
+            let consumed = {
+                let mut call = || -> Result<_, _> {
+                    let bytes = r.fill_buf()?;
 
-            // This ensures that the bytes from the previous block aren't lost.
-            if let Some(status) = self.check_previous_bytes_with(bytes) {
-                if let Some(prev_bytes) = self.get_unwritten_bytes_from_status(status) {
-                    w.write_all(prev_bytes)?;
-                    info!("Wrote previous: {}", prev_bytes.len());
-                    // The status is changed only on successful write.
-                    self.status.set(status);
-                }
-            }
+                    let (consume_amt, write_amt) = if self.stop_bytes.is_empty() {
+                        (bytes.len(), bytes.len())
+                    } else {
+                        self.check_previous_bytes_with(bytes);
+                        if let Some(prev_bytes) = self.get_unwritten_bytes() {
+                            w.write_all(&prev_bytes)?;
+                        }
 
-            let (unwritten, status) = self.check_suffix_bytes(bytes);
-            let consume_amount = match status {
-                StreamerStatus::StopperFound(amt)
-                | StreamerStatus::StopperFoundWithPrevious(amt) => {
-                    content_ended = true;
-                    amt
-                },
-                _ => bytes.len(),
+                        self.check_suffix_bytes(bytes);
+                        match self.status.get() {
+                            StreamerStatus::StopperFound(idx) => {
+                                content_ended = true;
+                                (idx + self.stop_bytes.len(), idx)
+                            },
+                            StreamerStatus::StopperExtendsFromPrevious(suffix_len) => {
+                                content_ended = true;
+                                return Ok(suffix_len)
+                            },
+                            _ => (bytes.len(), bytes.len().saturating_sub(self.stop_bytes.len())),
+                        }
+                    };
+
+                    if bytes.is_empty() {
+                        content_ended = true;
+                        return Ok(0)
+                    }
+
+                    if write_amt > 0 {
+                        w.write_all(&bytes[..write_amt])?;
+                    }
+
+                    Ok(consume_amt)
+                };
+
+                call()
             };
 
-            w.write_all(&bytes[..consume_amount])?;
-            info!("Wrote {}!", consume_amount);
-            self.prev_bytes_unwritten = unwritten.into();
-            self.status.set(status);
-
-            Ok(consume_amount)
-        };
-
-        match consumed {
-            Ok(len) => {
-                info!("Consumed {}!", len);
-                r.consume(len);
-                if content_ended {
-                    info!("Ready!");
-                    Ok(Async::Ready((r, w)))
-                } else {
-                    info!("Not ready!");
-                    self.reader = Some(r);
-                    self.writer = Some(w);
-                    Ok(Async::NotReady)
-                }
-            },
-            Err(ClusterError::Io(ref e)) if e.kind() == ErrorKind::WouldBlock => {
-                info!("Blocking!");
-                self.reader = Some(r);
-                self.writer = Some(w);
-                Ok(Async::NotReady)
-            },
-            Err(e) => Err(e),
+            match consumed {
+                Ok(len) => {
+                    r.consume(len);
+                    if content_ended {
+                        break
+                    }
+                },
+                Err(ClusterError::Io(ref e)) if e.kind() == ErrorKind::WouldBlock => (),
+                Err(e) => return Box::new(future::err(e)) as ClusterFuture<_>,
+            }
         }
+
+        Box::new(future::ok((r, w))) as ClusterFuture<_>
     }
 }

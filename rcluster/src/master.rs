@@ -79,7 +79,7 @@ impl Master {
             .and_then(move |c| {
                 let (r, w, m) = c.into();
                 StreamingBuffer::file_to_stream(source, w)
-                                .and_then(|s| s)
+                                .and_then(|s| s.stream())
                                 .map(move |(_fd, w)| Connection::from((r, w, m)))
             }).and_then(|c| c.write_magic())
             .and_then(|c| c.read_magic())
