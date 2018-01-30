@@ -18,6 +18,7 @@ rustls = "0.12"
 tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-rustls = "0.5"
+walkdir = "0.2"
 webpki = "0.18.0-alpha"
 
 [build-dependencies]

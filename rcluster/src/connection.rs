@@ -21,8 +21,8 @@ enum_from_primitive! {
     pub enum ConnectionFlag {
         MasterPing,
         SlaveOk,
-        MasterWantsFile,
-        MasterSendsFile,
+        MasterWantsPath,
+        MasterSendsPath,
         MasterWantsExecution,
     }
 }
@@ -121,7 +121,6 @@ impl<S> Connection<S>
 
     /// Read flag from this stream. Essentially, a flag is just a byte,
     /// and so if it fails, this will return a future that resolves to an error.
-    #[inline]
     pub fn read_flag(self) -> ClusterFuture<(Self, ConnectionFlag)> {
         let (r, w, m) = self.into();
         let async_handle = async_io::read_exact(r, [0; 1])
@@ -177,7 +176,7 @@ impl<S> Connection<S>
     }
 }
 
-/// Handle an incoming connectiion to the slave.
+/// Handle an incoming connection to the slave.
 #[inline]
 pub fn handle_incoming(stream: IncomingStream) -> ClusterFuture<()> {
     let async_conn = Connection::create_for_stream(stream, true)

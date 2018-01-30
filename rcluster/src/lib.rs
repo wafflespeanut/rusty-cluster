@@ -11,6 +11,7 @@ extern crate rustls;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_rustls;
+extern crate walkdir;
 extern crate webpki;
 
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
@@ -19,6 +20,7 @@ mod buffered;
 mod connection;
 pub mod errors;
 mod master;
+mod path_sync;
 mod slave;
 pub mod utils;
 

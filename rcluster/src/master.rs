@@ -65,6 +65,7 @@ impl Master {
         Ok(())
     }
 
+    /// Stream file from `source_path` in this machine to `dest_path` in slave.
     pub fn send_file<P>(&mut self, conn_id: usize,
                         source_path: P, dest_path: P) -> ClusterResult<()>
         where P: AsRef<str>
@@ -73,7 +74,7 @@ impl Master {
         let source = String::from(source_path.as_ref());
         let dest = String::from(dest_path.as_ref());
 
-        let async_conn = conn.write_flag(ConnectionFlag::MasterSendsFile)
+        let async_conn = conn.write_flag(ConnectionFlag::MasterSendsPath)
             .and_then(move |c| c.write_bytes(dest.into_bytes()))
             .and_then(|c| c.write_bytes(&[b'\n']))
             .and_then(move |c| {

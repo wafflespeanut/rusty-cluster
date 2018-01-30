@@ -162,7 +162,7 @@ impl<R, W> StreamingBuffer<R, W>
 impl<R, W> StreamingBuffer<R, W>
     where R: Read + 'static, W: Write + 'static
 {
-    /// Start streaming. This returns a future that resolves to the read/write halves.
+    /// Start streaming. This returns a future that resolves to the reader and writer.
     pub fn stream(mut self) -> ClusterFuture<(BufReader<R>, BufWriter<W>)> {
         let (mut r, mut w) = (self.reader.take().unwrap(), self.writer.take().unwrap());
 
