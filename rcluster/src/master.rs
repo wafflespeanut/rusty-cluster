@@ -54,7 +54,7 @@ impl Master {
         let conn = self.get_conn(conn_id)?;
         let async_conn = conn.write_flag(ConnectionFlag::MasterPing)
             .and_then(|c| c.read_magic())
-            .and_then(|c| c.read_flag());
+            .and_then(|c| c.read_flag::<ConnectionFlag>());
 
         let (conn, flag) = self.event_loop.run(async_conn)?;
         if flag != ConnectionFlag::SlaveOk {
@@ -65,6 +65,7 @@ impl Master {
         Ok(())
     }
 
+    /// Stream file from `source_path` in this machine to `dest_path` in slave.
     pub fn send_file<P>(&mut self, conn_id: usize,
                         source_path: P, dest_path: P) -> ClusterResult<()>
         where P: AsRef<str>
@@ -73,7 +74,7 @@ impl Master {
         let source = String::from(source_path.as_ref());
         let dest = String::from(dest_path.as_ref());
 
-        let async_conn = conn.write_flag(ConnectionFlag::MasterSendsFile)
+        let async_conn = conn.write_flag(ConnectionFlag::MasterSendsPath)
             .and_then(move |c| c.write_bytes(dest.into_bytes()))
             .and_then(|c| c.write_bytes(&[b'\n']))
             .and_then(move |c| {
@@ -83,7 +84,7 @@ impl Master {
                                 .map(move |(_fd, w)| Connection::from((r, w, m)))
             }).and_then(|c| c.write_magic())
             .and_then(|c| c.read_magic())
-            .and_then(|c| c.read_flag());
+            .and_then(|c| c.read_flag::<ConnectionFlag>());
 
         let (conn, flag) = self.event_loop.run(async_conn)?;
         if flag != ConnectionFlag::SlaveOk {

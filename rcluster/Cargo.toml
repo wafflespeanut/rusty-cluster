@@ -5,6 +5,7 @@ authors = ["Ravi Shankar <wafflespeanut@gmail.com>"]
 build = "build.rs"
 
 [dependencies]
+byteorder = "1.2"
 chrono = "0.4"
 derive-error = "0.0"
 enum_primitive = "0.1"
@@ -18,6 +19,7 @@ rustls = "0.12"
 tokio-core = "0.1"
 tokio-io = "0.1"
 tokio-rustls = "0.5"
+walkdir = "2.0"
 webpki = "0.18.0-alpha"
 
 [build-dependencies]

@@ -21,10 +21,14 @@ enum_from_primitive! {
     pub enum ConnectionFlag {
         MasterPing,
         SlaveOk,
-        MasterWantsFile,
-        MasterSendsFile,
+        MasterWantsPath,
+        MasterSendsPath,
         MasterWantsExecution,
     }
+}
+
+impl Into<u8> for ConnectionFlag {
+    fn into(self) -> u8 { self as u8 }
 }
 
 /// Outgoing stream from master (i.e., client)
@@ -121,15 +125,15 @@ impl<S> Connection<S>
 
     /// Read flag from this stream. Essentially, a flag is just a byte,
     /// and so if it fails, this will return a future that resolves to an error.
-    #[inline]
-    pub fn read_flag(self) -> ClusterFuture<(Self, ConnectionFlag)> {
+    pub fn read_flag<F>(self) -> ClusterFuture<(Self, ConnectionFlag)>
+        where F: FromPrimitive
+    {
         let (r, w, m) = self.into();
         let async_handle = async_io::read_exact(r, [0; 1])
             .map_err(ClusterError::from)
             .and_then(move |(r, flag_byte)| {
                 let flag = ConnectionFlag::from_u8(flag_byte[0])
                                           .ok_or(ClusterError::UnknownFlag);
-                info!("Got flag: {:?}", flag);
                 flag.map(move |f| ((r, w, m).into(), f))
             });
         Box::new(async_handle) as ClusterFuture<(Self, ConnectionFlag)>
@@ -137,8 +141,10 @@ impl<S> Connection<S>
 
     /// Write the given flag to this stream.
     #[inline]
-    pub fn write_flag(self, flag: ConnectionFlag) -> ClusterFuture<Self> {
-        let flag: [u8; 1] = [flag as u8];
+    pub fn write_flag<F>(self, flag: F) -> ClusterFuture<Self>
+        where F: Into<u8>
+    {
+        let flag: [u8; 1] = [flag.into()];
         self.write_bytes(flag)
     }
 
@@ -162,10 +168,9 @@ impl<S> Connection<S>
     /// appropriate methods to handle it. This is meant for the slave.
     #[inline]
     fn handle_flags(self) -> ClusterFuture<Self> {
-        let async_handle = self.read_flag().and_then(|(conn, flag)| {
+        let async_handle = self.read_flag::<ConnectionFlag>().and_then(|(conn, flag)| {
             conn.write_magic().and_then(move |conn| match flag {
                 ConnectionFlag::MasterPing => conn.write_flag(ConnectionFlag::SlaveOk),
-                ConnectionFlag::MasterSendsFile => conn.buffered_file_write(),
                 _ => {
                     error!("Dunno how to handle {:?}", flag);
                     Box::new(future::ok(conn)) as ClusterFuture<Self>
@@ -177,7 +182,7 @@ impl<S> Connection<S>
     }
 }
 
-/// Handle an incoming connectiion to the slave.
+/// Handle an incoming connection to the slave.
 #[inline]
 pub fn handle_incoming(stream: IncomingStream) -> ClusterFuture<()> {
     let async_conn = Connection::create_for_stream(stream, true)

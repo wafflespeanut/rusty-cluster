@@ -1,3 +1,4 @@
+extern crate byteorder;
 extern crate chrono;
 #[macro_use] extern crate derive_error;
 #[macro_use] extern crate enum_primitive;
@@ -11,14 +12,16 @@ extern crate rustls;
 extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_rustls;
+extern crate walkdir;
 extern crate webpki;
 
 include!(concat!(env!("OUT_DIR"), "/config.rs"));
 
+#[macro_use] pub mod errors;
 mod buffered;
 mod connection;
-pub mod errors;
 mod master;
+mod path_sync;
 mod slave;
 pub mod utils;
 
