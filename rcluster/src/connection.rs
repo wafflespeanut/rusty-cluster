@@ -3,11 +3,8 @@ use errors::{ClusterError, ClusterFuture};
 use futures::{Future, future};
 use num::FromPrimitive;
 use rand::{self, Rng};
-use rustls::{ClientSession, ServerSession};
-use tokio_core::net::TcpStream;
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{self as async_io, ReadHalf, WriteHalf};
-use tokio_rustls::TlsStream;
 
 use std::io::{BufReader, BufWriter};
 
@@ -31,27 +28,24 @@ impl Into<u8> for ConnectionFlag {
     fn into(self) -> u8 { self as u8 }
 }
 
-/// Outgoing stream from master (i.e., client)
-pub type OutgoingStream = TlsStream<TcpStream, ClientSession>;
-/// Incoming stream for slave (i.e., server)
-type IncomingStream = TlsStream<TcpStream, ServerSession>;
+pub type StreamingConnection<S> = Connection<ReadHalf<S>, WriteHalf<S>>;
 /// Deconstructed version of a connection. This exists so that we can deconstruct
 /// the struct, pass the necessary values for executing a future and reconstruct it back.
-type ConnectionParts<S> = (BufReader<ReadHalf<S>>, BufWriter<WriteHalf<S>>, [u8; MAGIC_LENGTH]);
+pub type ConnectionParts<R, W> = (BufReader<R>, BufWriter<W>, [u8; MAGIC_LENGTH]);
 
 /// Represents a connection (for master/slave). This is called immediately after
 /// `connect_async` or `accept_async` (from TLS). All methods of this struct resolve
 /// to a future, and so they all can be chained.
-pub struct Connection<S: AsyncRead + AsyncWrite> {
-    reader: BufReader<ReadHalf<S>>,
-    writer: BufWriter<WriteHalf<S>>,
+pub struct Connection<R: AsyncRead, W: AsyncWrite> {
+    reader: BufReader<R>,
+    writer: BufWriter<W>,
     magic: [u8; MAGIC_LENGTH],
 }
 
-impl<S> From<ConnectionParts<S>> for Connection<S>
-    where S: AsyncRead + AsyncWrite
+impl<R, W> From<ConnectionParts<R, W>> for Connection<R, W>
+    where R: AsyncRead, W: AsyncWrite
 {
-    fn from(v: ConnectionParts<S>) -> Self {
+    fn from(v: ConnectionParts<R, W>) -> Self {
         Connection {
             reader: v.0,
             writer: v.1,
@@ -60,16 +54,16 @@ impl<S> From<ConnectionParts<S>> for Connection<S>
     }
 }
 
-impl<S> Into<ConnectionParts<S>> for Connection<S>
-    where S: AsyncRead + AsyncWrite
+impl<R, W> Into<ConnectionParts<R, W>> for Connection<R, W>
+    where R: AsyncRead, W: AsyncWrite
 {
     #[inline]
-    fn into(self) -> ConnectionParts<S> {
+    fn into(self) -> ConnectionParts<R, W> {
         (self.reader, self.writer, self.magic)
     }
 }
 
-impl<S> Connection<S>
+impl<S> StreamingConnection<S>
     where S: AsyncRead + AsyncWrite + 'static
 {
     /// Create a connection object for an incoming/outgoing stream. If the `bool` is set
@@ -90,7 +84,11 @@ impl<S> Connection<S>
             Connection { reader, writer, magic }.write_magic()
         }
     }
+}
 
+impl<R, W> Connection<R, W>
+    where R: AsyncRead + 'static, W: AsyncWrite + 'static
+{
     /// Write bytes to the "writable half" of this connection and flush the stream.
     #[inline]
     pub fn write_bytes<B>(self, bytes: B) -> ClusterFuture<Self>
@@ -167,7 +165,7 @@ impl<S> Connection<S>
     /// The next byte in the `IncomingStream` is a flag. Read it and use
     /// appropriate methods to handle it. This is meant for the slave.
     #[inline]
-    fn handle_flags(self) -> ClusterFuture<Self> {
+    pub fn handle_flags(self) -> ClusterFuture<Self> {
         let async_handle = self.read_flag::<ConnectionFlag>().and_then(|(conn, flag)| {
             conn.write_magic().and_then(move |conn| match flag {
                 ConnectionFlag::MasterPing => conn.write_flag(ConnectionFlag::SlaveOk),
@@ -180,13 +178,4 @@ impl<S> Connection<S>
 
         Box::new(async_handle) as ClusterFuture<Self>
     }
-}
-
-/// Handle an incoming connection to the slave.
-#[inline]
-pub fn handle_incoming(stream: IncomingStream) -> ClusterFuture<()> {
-    let async_conn = Connection::create_for_stream(stream, true)
-                                .and_then(|c| c.handle_flags())
-                                .map(|_| ());
-    Box::new(async_conn) as ClusterFuture<()>
 }

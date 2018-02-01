@@ -1,20 +1,24 @@
 use buffered::StreamingBuffer;
 use config::CLIENT_CONFIG;
-use connection::{Connection, ConnectionFlag, OutgoingStream};
+use connection::{Connection, ConnectionFlag, StreamingConnection};
 use errors::{ClusterError, ClusterResult};
 use futures::Future;
+use rustls::ClientSession;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
-use tokio_rustls::ClientConfigExt;
+use tokio_rustls::{ClientConfigExt, TlsStream};
 use utils::DOMAIN;
 
 use std::net::SocketAddr;
+
+/// Outgoing stream from master (i.e., client)
+type OutgoingStream = TlsStream<TcpStream, ClientSession>;
 
 /// Master (i.e., client) which connects to slave machines. As long as this struct exists,
 /// the sockets added will be kept alive, and so we can re-use it for further messages.
 pub struct Master {
     event_loop: Core,
-    slaves: Vec<Option<Connection<OutgoingStream>>>,
+    slaves: Vec<Option<StreamingConnection<OutgoingStream>>>,
     addrs: Vec<SocketAddr>,
 }
 
@@ -97,7 +101,7 @@ impl Master {
 
     /// Get the connection corresponding to the given ID. Panics if this has been
     /// done before and the connection hasn't been set.
-    fn get_conn(&mut self, id: usize) -> ClusterResult<Connection<OutgoingStream>> {
+    fn get_conn(&mut self, id: usize) -> ClusterResult<StreamingConnection<OutgoingStream>> {
         if id > self.slaves.len() {
             return Err(ClusterError::InvalidConnectionId)
         }

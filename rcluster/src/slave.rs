@@ -1,4 +1,4 @@
-use {connection};
+use connection::Connection;
 use config::SERVER_CONFIG;
 use errors::{ClusterError, ClusterResult};
 use futures::{Future, Stream};
@@ -35,7 +35,9 @@ impl Slave {
             handle.spawn({
                 SERVER_CONFIG.accept_async(stream)
                     .map_err(ClusterError::from)
-                    .and_then(connection::handle_incoming)
+                    .and_then(|stream| Connection::create_for_stream(stream, true))
+                    .and_then(|c| c.handle_flags())
+                    .map(|_| ())
                     .map_err(move |e| error!("Error in stream from {}: {:?}", addr, e))
             });
 
