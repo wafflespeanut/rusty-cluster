@@ -3,7 +3,10 @@ use byteorder::{BigEndian, ByteOrder};
 use connection::Connection;
 use errors::ClusterFuture;
 use futures::{Future, future};
+use std::fs;
+use std::io::{self, ErrorKind};
 use tokio_io::{AsyncRead, AsyncWrite};
+use tokio_io::io::{self as async_io};
 use walkdir::WalkDir;
 
 use std::path::{Path, PathBuf};
@@ -23,6 +26,8 @@ enum_from_primitive! {
 impl Into<u8> for FileType {
     fn into(self) -> u8 { self as u8 }
 }
+
+// FIXME: DoS is possible on every usage of `read_until` with `Vec::new`
 
 impl<R, W> PathSync<R, W>
     where R: AsyncRead + 'static, W: AsyncWrite + 'static
@@ -47,11 +52,14 @@ impl<R, W> PathSync<R, W>
                     let path = PathBuf::from(entry.path());
                     let entry_type = entry.file_type();
 
-                    // only files and dirs - no symlinks
+                    // Allow only files and dirs - no symlinks
                     if entry_type.is_symlink() {
                         info!("Ignoring symlink: {}", path.display());
                         continue
                     }
+
+                    // Write file size, file type flag, relative path, newline,
+                    // (optional) file contents (with trailing magic bytes) - in that order.
 
                     let rel_path = PathBuf::from(path.strip_prefix(&parent).unwrap());
                     let rel_path_str = rel_path.to_string_lossy().into_owned();
@@ -84,6 +92,57 @@ impl<R, W> PathSync<R, W>
                 }
 
                 Box::new(future::ok(conn))
+            });
+
+        Box::new(async_stream) as ClusterFuture<_>
+    }
+
+    pub fn stream_to_source(self) -> ClusterFuture<Connection<R, W>> {
+        let (r, w, m) = self.0.into();
+        let async_stream = async_io::read_until(r, b'\n', Vec::new())
+            .map_err(ClusterError::from)
+            .and_then(move |(r, bytes)| {
+                let path_str = String::from_utf8_lossy(&bytes[..bytes.len() - 1]);
+                let dest_path = PathBuf::from(path_str);
+
+                if dest_path.is_file() {
+                    // If destination exists and it's a file, then bail out.
+                    return future::err(ClusterError::Io(io::Error::new(ErrorKind::AlreadyExists, "Destination is a file!")))
+                } else if !dest_path.exists() {
+                    // If destination doesn't exist, then try to create dirs recursively.
+                    future_try!(fs::create_dir_all(&dest_path).map_err(ClusterError::from));
+                }
+
+                let mut conn = Connection::from((r, w, m));
+                loop {
+                    let (r, w, m) = conn.into();
+                    let async_meta = async_io::read_exact(r, [0; 8])
+                        .map(ClusterError::from)
+                        .and_then(|(r, size_buf)| (r, BigEndian::read_u64(&size_buf)))
+                        .and_then(move |(r, size)| {
+                            Connection::from((r, w, m)).read_flag().map(|(c, f)| {
+                                let (r, w, m) = c.into();
+                                (r, w, m, size, f)
+                            })
+                        });
+
+                    let (r, w, m, file_size, file_type) = future_try_wait!(async_meta);
+                    let async_path = async_io::read_until(r, b'\n', Vec::new())
+                        .map_err(ClusterError::from)
+                        .and_then(move |(r, bytes)| (r, String::from_utf8_lossy(&bytes[..bytes.len() - 1])));
+
+                    let (r, rel_path) = future_try_wait!(async_path);
+                    let abs_path = dest_path.join(rel_path);
+                    if file_type == FileType::Directory {
+                        future_try!(fs::create_dir_all(&abs_path).map_err(ClusterError::from));
+                        continue
+                    }
+
+                    let async_read = StreamingBuffer::stream_to_file(r, &m, &abs_path)
+                        .and_then(|s| s.stream())
+                        .map(move |(r, _fd)| Connection::from((r, w, m)));
+                    conn = future_try_wait!(async_read);
+                }
             });
 
         Box::new(async_stream) as ClusterFuture<_>

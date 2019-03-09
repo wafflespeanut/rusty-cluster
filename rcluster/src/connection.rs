@@ -1,14 +1,17 @@
-use buffered::{BUFFER_SIZE, StreamingBuffer};
+use buffered::BUFFER_SIZE;
 use errors::{ClusterError, ClusterFuture};
 use futures::{Future, future};
 use num::FromPrimitive;
-use rand::{self, Rng};
+use rand::{self, RngCore};
 use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_io::io::{self as async_io, ReadHalf, WriteHalf};
 
 use std::io::{BufReader, BufWriter};
 
 /// Length of the random separator used in a connection for boundaries.
+///
+/// **Note: This should always be >= 8.** Values less than "8" may lead to
+/// undefined behavior while transferring file content from stream.
 pub const MAGIC_LENGTH: usize = 16;
 
 enum_from_primitive! {
@@ -28,6 +31,7 @@ impl Into<u8> for ConnectionFlag {
     fn into(self) -> u8 { self as u8 }
 }
 
+/// A connection containing the read and write halves of a TCP stream.
 pub type StreamingConnection<S> = Connection<ReadHalf<S>, WriteHalf<S>>;
 /// Deconstructed version of a connection. This exists so that we can deconstruct
 /// the struct, pass the necessary values for executing a future and reconstruct it back.

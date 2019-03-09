@@ -1,8 +1,8 @@
-use buffered::StreamingBuffer;
 use config::CLIENT_CONFIG;
 use connection::{Connection, ConnectionFlag, StreamingConnection};
 use errors::{ClusterError, ClusterResult};
 use futures::Future;
+use path_sync::PathSync;
 use rustls::ClientSession;
 use tokio_core::net::TcpStream;
 use tokio_core::reactor::Core;
@@ -79,14 +79,7 @@ impl Master {
         let dest = String::from(dest_path.as_ref());
 
         let async_conn = conn.write_flag(ConnectionFlag::MasterSendsPath)
-            .and_then(move |c| c.write_bytes(dest.into_bytes()))
-            .and_then(|c| c.write_bytes(&[b'\n']))
-            .and_then(move |c| {
-                let (r, w, m) = c.into();
-                StreamingBuffer::file_to_stream(source, w)
-                                .and_then(|s| s.stream())
-                                .map(move |(_fd, w)| Connection::from((r, w, m)))
-            }).and_then(|c| c.write_magic())
+            .and_then(|c| PathSync(c).source_to_stream(source, dest))
             .and_then(|c| c.read_magic())
             .and_then(|c| c.read_flag::<ConnectionFlag>());
 
